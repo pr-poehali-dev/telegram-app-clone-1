@@ -1,7 +1,30 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import Icon from '@/components/ui/icon';
 
+// ─── API URLs ─────────────────────────────────────────────────────────────────
+
+const API = {
+  register: 'https://functions.poehali.dev/ed281b66-bba8-4ecb-ad7a-ece655b6adb8',
+  login: 'https://functions.poehali.dev/6a7861d8-ff15-432d-9e79-2368dcfe4824',
+  me: 'https://functions.poehali.dev/4fee15bd-40cf-4124-a98f-e0a3660fbdf8',
+};
+
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+
+const TOKEN_KEY = 'link_token';
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const saveToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
+const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+
 // ─── Types ───────────────────────────────────────────────────────────────────
+
+interface AuthUser {
+  id: number;
+  username: string;
+  display_name: string;
+  phone: string | null;
+  about: string;
+}
 
 type Tab = 'chats' | 'statuses' | 'contacts' | 'profile' | 'settings';
 type CallType = 'voice' | 'video' | null;
@@ -41,6 +64,124 @@ interface Status {
   viewed: boolean;
   color: string;
 }
+
+// ─── Auth Screen ─────────────────────────────────────────────────────────────
+
+const AuthScreen = ({ onAuth }: { onAuth: (user: AuthUser, token: string) => void }) => {
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [form, setForm] = useState({ username: '', display_name: '', password: '', phone: '' });
+
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm(f => ({ ...f, [k]: e.target.value }));
+
+  const submit = async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const url = mode === 'login' ? API.login : API.register;
+      const body = mode === 'login'
+        ? { username: form.username, password: form.password }
+        : { username: form.username, password: form.password, display_name: form.display_name, phone: form.phone || undefined };
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+      if (!res.ok) {
+        setError(parsed.error || 'Что-то пошло не так');
+      } else {
+        saveToken(parsed.token);
+        onAuth(parsed.user, parsed.token);
+      }
+    } catch {
+      setError('Нет соединения с сервером');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const Field = ({ placeholder, value, onChange, type = 'text' }: {
+    placeholder: string; value: string; onChange: (e: React.ChangeEvent<HTMLInputElement>) => void; type?: string;
+  }) => (
+    <input
+      type={type}
+      placeholder={placeholder}
+      value={value}
+      onChange={onChange}
+      onKeyDown={e => e.key === 'Enter' && submit()}
+      className="w-full bg-muted rounded-2xl px-4 py-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/30 transition-all"
+    />
+  );
+
+  return (
+    <div className="flex flex-col h-full bg-white">
+      {/* Header gradient */}
+      <div className="flex flex-col items-center justify-center pt-14 pb-8 bg-gradient-to-b from-primary/5 to-transparent">
+        <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center shadow-lg shadow-primary/30 mb-4">
+          <Icon name="MessageCircle" size={32} className="text-white" />
+        </div>
+        <h1 className="text-2xl font-bold">Линк</h1>
+        <p className="text-sm text-muted-foreground mt-1">Мессенджер нового поколения</p>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex mx-6 mb-6 bg-muted rounded-2xl p-1">
+        {(['login', 'register'] as const).map(m => (
+          <button
+            key={m}
+            onClick={() => { setMode(m); setError(''); }}
+            className={`flex-1 py-2 rounded-xl text-sm font-semibold transition-all ${mode === m ? 'bg-white text-foreground shadow-sm' : 'text-muted-foreground'}`}
+          >
+            {m === 'login' ? 'Вход' : 'Регистрация'}
+          </button>
+        ))}
+      </div>
+
+      {/* Form */}
+      <div className="flex flex-col gap-3 px-6">
+        {mode === 'register' && (
+          <Field placeholder="Имя и фамилия" value={form.display_name} onChange={set('display_name')} />
+        )}
+        <Field placeholder="Имя пользователя (логин)" value={form.username} onChange={set('username')} />
+        {mode === 'register' && (
+          <Field placeholder="Телефон (необязательно)" value={form.phone} onChange={set('phone')} type="tel" />
+        )}
+        <Field placeholder="Пароль" value={form.password} onChange={set('password')} type="password" />
+
+        {error && (
+          <div className="flex items-center gap-2 text-red-500 text-sm bg-red-50 rounded-xl px-4 py-2.5">
+            <Icon name="AlertCircle" size={16} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <button
+          onClick={submit}
+          disabled={loading}
+          className="mt-1 w-full py-3.5 rounded-2xl bg-primary text-white font-semibold text-sm transition-all active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2"
+        >
+          {loading ? (
+            <>
+              <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+              <span>Подождите...</span>
+            </>
+          ) : (
+            mode === 'login' ? 'Войти' : 'Создать аккаунт'
+          )}
+        </button>
+      </div>
+
+      <p className="text-center text-xs text-muted-foreground mt-6 px-8">
+        Продолжая, вы соглашаетесь с условиями использования сервиса Линк
+      </p>
+    </div>
+  );
+};
 
 // ─── Mock Data ────────────────────────────────────────────────────────────────
 
@@ -451,60 +592,72 @@ const ContactsTab = ({ onStartChat }: { onStartChat: (name: string, avatar: stri
 
 // ─── Profile Tab ──────────────────────────────────────────────────────────────
 
-const ProfileTab = () => (
-  <div className="flex flex-col h-full overflow-y-auto scrollbar-hide">
-    <div className="px-4 pt-4 pb-3">
-      <h1 className="text-xl font-bold">Профиль</h1>
-    </div>
+const ProfileTab = ({ user, onLogout }: { user: AuthUser; onLogout: () => void }) => {
+  const initials = user.display_name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const items = [
+    { icon: 'AtSign', label: 'Имя пользователя', value: '@' + user.username },
+    ...(user.phone ? [{ icon: 'Phone', label: 'Телефон', value: user.phone }] : []),
+    { icon: 'Info', label: 'О себе', value: user.about || 'Привет! Я использую Линк' },
+  ];
 
-    <div className="px-4 pb-6">
-      <div className="flex flex-col items-center py-8 gap-3">
-        <div className="relative">
-          <div className="w-24 h-24 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-2xl font-bold">
-            ВП
+  return (
+    <div className="flex flex-col h-full overflow-y-auto scrollbar-hide">
+      <div className="px-4 pt-4 pb-3">
+        <h1 className="text-xl font-bold">Профиль</h1>
+      </div>
+
+      <div className="px-4 pb-6">
+        <div className="flex flex-col items-center py-8 gap-3">
+          <div className="relative">
+            <div className="w-24 h-24 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-2xl font-bold">
+              {initials}
+            </div>
+            <button className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center shadow-md">
+              <Icon name="Camera" size={14} />
+            </button>
           </div>
-          <button className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center shadow-md">
-            <Icon name="Camera" size={14} />
+          <div className="text-center">
+            <h2 className="text-xl font-bold">{user.display_name}</h2>
+            <p className="text-muted-foreground text-sm">@{user.username}</p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {items.map(item => (
+            <div key={item.label} className="flex items-center gap-3 px-4 py-3.5 rounded-2xl border border-border hover:bg-muted/30 transition-colors cursor-pointer">
+              <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
+                <Icon name={item.icon as 'AtSign' | 'Phone' | 'Info'} size={18} className="text-primary" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-muted-foreground">{item.label}</p>
+                <p className="text-sm font-medium truncate">{item.value}</p>
+              </div>
+              <Icon name="ChevronRight" size={16} className="text-muted-foreground" />
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 px-4 py-3.5 rounded-2xl bg-primary/5 border border-primary/20">
+          <div className="flex items-center gap-2 mb-3">
+            <Icon name="Star" size={16} className="text-primary" />
+            <span className="text-sm font-semibold text-primary">Линк Премиум</span>
+          </div>
+          <p className="text-xs text-muted-foreground mb-3">Разблокируй эксклюзивные функции: большие файлы, отсутствие рекламы, приоритетная поддержка</p>
+          <button className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-semibold transition-all active:scale-95">
+            Попробовать бесплатно
           </button>
         </div>
-        <div className="text-center">
-          <h2 className="text-xl font-bold">Владимир Петров</h2>
-          <p className="text-muted-foreground text-sm">@vpetrov</p>
-        </div>
-      </div>
 
-      <div className="space-y-3">
-        {[
-          { icon: 'Phone', label: 'Телефон', value: '+7 (900) 000-00-00' },
-          { icon: 'Mail', label: 'Email', value: 'v.petrov@mail.ru' },
-          { icon: 'Info', label: 'О себе', value: 'Привет! Я использую Линк' },
-        ].map(item => (
-          <div key={item.label} className="flex items-center gap-3 px-4 py-3.5 rounded-2xl border border-border hover:bg-muted/30 transition-colors cursor-pointer">
-            <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-              <Icon name={item.icon as 'Phone' | 'Mail' | 'Info'} size={18} className="text-primary" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-muted-foreground">{item.label}</p>
-              <p className="text-sm font-medium truncate">{item.value}</p>
-            </div>
-            <Icon name="ChevronRight" size={16} className="text-muted-foreground" />
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-4 px-4 py-3.5 rounded-2xl bg-primary/5 border border-primary/20">
-        <div className="flex items-center gap-2 mb-3">
-          <Icon name="Star" size={16} className="text-primary" />
-          <span className="text-sm font-semibold text-primary">Линк Премиум</span>
-        </div>
-        <p className="text-xs text-muted-foreground mb-3">Разблокируй эксклюзивные функции: большие файлы, отсутствие рекламы, приоритетная поддержка</p>
-        <button className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-semibold transition-all active:scale-95">
-          Попробовать бесплатно
+        <button
+          onClick={onLogout}
+          className="mt-4 w-full py-3 rounded-2xl text-red-500 text-sm font-semibold border border-red-100 hover:bg-red-50 transition-colors"
+        >
+          Выйти из аккаунта
         </button>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ─── Settings Tab ─────────────────────────────────────────────────────────────
 
@@ -575,11 +728,6 @@ const SettingsTab = () => {
         <SettingsRow icon="Info" label="О приложении" right={<span className="text-sm text-muted-foreground">1.0.0</span>} />
       </SettingsSection>
 
-      <div className="px-4">
-        <button className="w-full py-3 rounded-2xl text-red-500 text-sm font-semibold border border-red-100 hover:bg-red-50 transition-colors">
-          Выйти из аккаунта
-        </button>
-      </div>
     </div>
   );
 };
@@ -597,9 +745,35 @@ const NAV_ITEMS: { id: Tab; icon: string; label: string }[] = [
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const Index = () => {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('chats');
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [call, setCall] = useState<{ type: CallType; name: string; avatar: string } | null>(null);
+
+  // Восстанавливаем сессию при загрузке
+  useEffect(() => {
+    const token = getToken();
+    if (!token) { setAuthLoading(false); return; }
+    fetch(API.me, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.json())
+      .then(d => {
+        const parsed = typeof d === 'string' ? JSON.parse(d) : d;
+        if (parsed.user) setAuthUser(parsed.user);
+        else clearToken();
+      })
+      .catch(() => clearToken())
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  const handleAuth = useCallback((user: AuthUser) => setAuthUser(user), []);
+
+  const handleLogout = useCallback(() => {
+    clearToken();
+    setAuthUser(null);
+    setTab('chats');
+    setActiveChat(null);
+  }, []);
 
   const handleOpenChat = (chat: Chat) => setActiveChat(chat);
 
@@ -632,14 +806,20 @@ const Index = () => {
 
         {/* Content */}
         <div className="flex-1 overflow-hidden relative">
-          {activeChat ? (
+          {authLoading ? (
+            <div className="h-full flex items-center justify-center">
+              <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+            </div>
+          ) : !authUser ? (
+            <AuthScreen onAuth={handleAuth} />
+          ) : activeChat ? (
             <ChatView chat={activeChat} onBack={() => setActiveChat(null)} onCall={handleCall} />
           ) : (
             <div className="h-full animate-fade-in">
               {tab === 'chats' && <ChatsTab onOpenChat={handleOpenChat} />}
               {tab === 'statuses' && <StatusesTab />}
               {tab === 'contacts' && <ContactsTab onStartChat={handleStartChat} />}
-              {tab === 'profile' && <ProfileTab />}
+              {tab === 'profile' && authUser && <ProfileTab user={authUser} onLogout={handleLogout} />}
               {tab === 'settings' && <SettingsTab />}
             </div>
           )}
@@ -650,7 +830,7 @@ const Index = () => {
         </div>
 
         {/* Bottom nav */}
-        {!activeChat && (
+        {authUser && !activeChat && (
           <div className="flex-shrink-0 bg-white border-t border-border">
             <div className="flex items-center justify-around px-2 py-2">
               {NAV_ITEMS.map(item => {
